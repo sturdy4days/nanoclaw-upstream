@@ -116,7 +116,7 @@ function buildDestinationsSection(): string {
   }
   lines.push('');
   lines.push(
-    'Wrap each delivered message in a `<message to="name">…</message>` block; include several blocks in one response to address several destinations. `<internal>…</internal>` marks thinking you don\'t want sent — anything outside these tags is also treated as scratchpad.',
+    'Wrap each delivered message in a `<message to="name">…</message>` block; include several blocks in one response to address several destinations. `<internal>…</internal>` marks thinking you don\'t want sent.',
   );
   lines.push('');
   lines.push(
