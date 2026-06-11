@@ -69,6 +69,13 @@ export interface ResourceDef {
   };
   /** Non-standard verbs (grant, revoke, add, remove, restart, etc.). */
   customOperations?: Record<string, CustomOperation>;
+  /**
+   * Replace the generic INSERT with a domain helper. Use when creating a row
+   * has REQUIRED side effects the generic path can't know about — e.g. a
+   * wiring's companion agent_destinations row, without which the delivery
+   * ACL silently blocks the agent's sends to the newly wired chat.
+   */
+  customInsert?: (values: Record<string, unknown>) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -153,6 +160,10 @@ function genericCreate(def: ResourceDef) {
       }
     }
 
+    if (def.customInsert) {
+      def.customInsert(values);
+      return values;
+    }
     const colNames = Object.keys(values);
     const placeholders = colNames.map((c) => `@${c}`);
     getDb()

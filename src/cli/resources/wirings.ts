@@ -1,4 +1,6 @@
 import { registerResource } from '../crud.js';
+import { createMessagingGroupAgent } from '../../db/messaging-groups.js';
+import type { MessagingGroupAgent } from '../../types.js';
 
 registerResource({
   name: 'wiring',
@@ -67,4 +69,19 @@ registerResource({
     { name: 'created_at', type: 'string', description: 'Auto-set.', generated: true },
   ],
   operations: { list: 'open', get: 'open', create: 'approval', update: 'approval', delete: 'approval' },
+  // The generic INSERT is not enough for wirings: createMessagingGroupAgent
+  // also creates the companion agent_destinations row that delivery's ACL
+  // checks. Without it a CLI-created wiring RECEIVES fine but every send the
+  // agent addresses to the chat is silently dropped (no error at create time,
+  // none visible to the agent) — found live 2026-06-11.
+  customInsert: (values) =>
+    createMessagingGroupAgent({
+      // The helper's INSERT names every column; fill the ones the CLI def
+      // leaves optional with the same defaults setup/register.ts uses.
+      engage_pattern: null,
+      sender_scope: 'all',
+      ignored_message_policy: 'drop',
+      priority: 0,
+      ...values,
+    } as unknown as MessagingGroupAgent),
 });
