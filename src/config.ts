@@ -1,9 +1,16 @@
 import os from 'os';
 import path from 'path';
 
-import { readEnvFile } from './env.js';
+import { promoteEnvFlags, readEnvFile } from './env.js';
 import { getContainerImageBase, getDefaultContainerImage, getInstallSlug } from './install-slug.js';
 import { isValidTimezone } from './timezone.js';
+
+// Non-secret NANOCLAW_* flags from .env become process.env so any module can
+// read them directly (launchd/systemd services get no shell env). config.ts
+// is evaluated before every flag reader in the import graph, so top-level
+// `process.env.NANOCLAW_*` consts (e.g. egress-lockdown.ts) see the values.
+// Secrets stay out of process.env via readEnvFile below.
+promoteEnvFlags();
 
 // Read config values from .env (falls back to process.env).
 const envConfig = readEnvFile(['ASSISTANT_NAME', 'ASSISTANT_HAS_OWN_NUMBER', 'ONECLI_URL', 'ONECLI_API_KEY', 'TZ']);

@@ -40,3 +40,42 @@ export function readEnvFile(keys: string[]): Record<string, string> {
 
   return result;
 }
+
+/**
+ * Promote non-secret operational flags from .env into process.env (existing
+ * process.env values win). Scoped to the NANOCLAW_ prefix by convention:
+ * those are feature flags and tuning knobs (e.g. NANOCLAW_EGRESS_LOCKDOWN),
+ * never credentials — secrets keep using readEnvFile so they stay out of
+ * the process environment (see the module doc above). Services started by
+ * launchd/systemd don't get a shell env, so without this a NANOCLAW_* flag
+ * added to .env silently never reaches modules that read process.env
+ * directly.
+ */
+export function promoteEnvFlags(prefixes = ['NANOCLAW_']): void {
+  // Tests must be hermetic: a developer's live-install .env flags must not
+  // steer test behavior.
+  if (process.env.VITEST) return;
+  const envFile = path.join(process.cwd(), '.env');
+  let content: string;
+  try {
+    content = fs.readFileSync(envFile, 'utf-8');
+  } catch {
+    return;
+  }
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eqIdx = trimmed.indexOf('=');
+    if (eqIdx === -1) continue;
+    const key = trimmed.slice(0, eqIdx).trim();
+    if (!prefixes.some((p) => key.startsWith(p)) || process.env[key] !== undefined) continue;
+    let value = trimmed.slice(eqIdx + 1).trim();
+    if (
+      value.length >= 2 &&
+      ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))
+    ) {
+      value = value.slice(1, -1);
+    }
+    if (value) process.env[key] = value;
+  }
+}
