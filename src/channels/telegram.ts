@@ -7,7 +7,14 @@ import { createTelegramAdapter } from '@chat-adapter/telegram';
 
 import { readEnvFile } from '../env.js';
 import { log } from '../log.js';
-import { createMessagingGroup, getMessagingGroupByPlatform, updateMessagingGroup } from '../db/messaging-groups.js';
+import { getAgentGroupByFolder } from '../db/agent-groups.js';
+import {
+  createMessagingGroup,
+  createMessagingGroupAgent,
+  getMessagingGroupAgentByPair,
+  getMessagingGroupByPlatform,
+  updateMessagingGroup,
+} from '../db/messaging-groups.js';
 import { grantRole, hasAnyOwner } from '../modules/permissions/db/user-roles.js';
 import { upsertUser } from '../modules/permissions/db/users.js';
 import { createChatSdkBridge, type ReplyContext } from './chat-sdk-bridge.js';
@@ -179,10 +186,47 @@ function createPairingInterceptor(
         promotedToOwner = true;
       }
 
+      // Act on the pairing intent. Without this, `--intent wire-to:<folder>`
+      // only registers the chat: pairing reports success, but no wiring row
+      // exists, so messages from the chat route nowhere until one is created
+      // by hand. Defaults mirror setup/register.ts — groups engage on
+      // mention, DMs on every message, shared session. `new-agent` intents
+      // still need the full init flow; only wire-to is machine-consumable.
+      const intent = consumed.intent;
+      let wired = false;
+      if (typeof intent === 'object' && intent.kind === 'wire-to' && intent.folder) {
+        const agentGroup = getAgentGroupByFolder(intent.folder);
+        const mg = getMessagingGroupByPlatform('telegram', platformId);
+        if (agentGroup && mg) {
+          if (!getMessagingGroupAgentByPair(mg.id, agentGroup.id)) {
+            const isGroup = mg.is_group === 1;
+            createMessagingGroupAgent({
+              id: `mga-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              messaging_group_id: mg.id,
+              agent_group_id: agentGroup.id,
+              engage_mode: isGroup ? 'mention' : 'pattern',
+              engage_pattern: isGroup ? null : '.',
+              sender_scope: 'all',
+              ignored_message_policy: 'drop',
+              session_mode: 'shared',
+              priority: 0,
+              created_at: new Date().toISOString(),
+            });
+          }
+          wired = true;
+        } else {
+          log.warn('Telegram pairing: wire-to intent could not be applied', {
+            folder: intent.folder,
+            agentGroupFound: !!agentGroup,
+          });
+        }
+      }
+
       log.info('Telegram pairing accepted — chat registered', {
         platformId,
         pairedUser: pairedUserId,
         promotedToOwner,
+        wired,
         intent: consumed.intent,
       });
 
