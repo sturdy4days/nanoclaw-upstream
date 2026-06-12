@@ -7,7 +7,7 @@
 import { isContainerRunning, killContainer, wakeContainer } from './container-runner.js';
 import { getSession, getSessionsByAgentGroup } from './db/sessions.js';
 import { log } from './log.js';
-import { writeSessionMessage } from './session-manager.js';
+import { recoverOutboundJournal, writeSessionMessage } from './session-manager.js';
 
 /**
  * Kill all running containers for an agent group and respawn them.
@@ -48,7 +48,10 @@ export function restartAgentGroupContainers(agentGroupId: string, reason: string
             const s = getSession(session.id);
             if (s) wakeContainer(s);
           }
-        : undefined,
+        : // No respawn follows this kill (the session waits for the next user
+          // message), so roll back any journal the SIGKILL stranded — otherwise
+          // the host's readonly delivery polls error until that next spawn (#2516).
+          () => recoverOutboundJournal(session.agent_group_id, session.id),
     );
   }
 

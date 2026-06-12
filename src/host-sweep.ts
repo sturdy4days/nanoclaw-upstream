@@ -44,7 +44,14 @@ import {
   type ContainerState,
 } from './db/session-db.js';
 import { log } from './log.js';
-import { openInboundDb, openOutboundDb, openOutboundDbRw, inboundDbPath, heartbeatPath } from './session-manager.js';
+import {
+  openInboundDb,
+  openOutboundDb,
+  openOutboundDbRw,
+  inboundDbPath,
+  heartbeatPath,
+  recoverOutboundJournal,
+} from './session-manager.js';
 import { isContainerRunning, killContainer, wakeContainer } from './container-runner.js';
 import type { Session } from './types.js';
 
@@ -263,7 +270,9 @@ function enforceRunningContainerSla(
       heartbeatAgeMs: decision.heartbeatAgeMs,
       ceilingMs: decision.ceilingMs,
     });
-    killContainer(session.id, 'absolute-ceiling');
+    // SIGKILL can strand a hot journal the readonly delivery handle can't
+    // roll back (#2516) — recover it once the container is confirmed gone.
+    killContainer(session.id, 'absolute-ceiling', () => recoverOutboundJournal(session.agent_group_id, session.id));
     resetStuckProcessingRows(inDb, outDb, session, 'absolute-ceiling');
     return;
   }
@@ -274,7 +283,7 @@ function enforceRunningContainerSla(
     claimAgeMs: decision.claimAgeMs,
     toleranceMs: decision.toleranceMs,
   });
-  killContainer(session.id, 'claim-stuck');
+  killContainer(session.id, 'claim-stuck', () => recoverOutboundJournal(session.agent_group_id, session.id));
   resetStuckProcessingRows(inDb, outDb, session, 'claim-stuck');
 }
 
