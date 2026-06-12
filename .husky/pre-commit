@@ -1,5 +1,19 @@
+# Fail CLOSED when the formatter can't run. pnpm is often absent from a
+# plain login shell's PATH (corepack shims live inside the Node prefix), and
+# the old behavior — "pnpm: command not found" followed by a successful
+# commit — silently skipped formatting, which is worse than no hook: you
+# believe the check ran. Fall back to corepack, then block the commit.
+# Bypass deliberately with `git commit --no-verify`.
+if command -v pnpm >/dev/null 2>&1; then
+  pnpm_cmd="pnpm"
+elif command -v corepack >/dev/null 2>&1; then
+  pnpm_cmd="corepack pnpm"
+else
+  echo "pre-commit: pnpm not found on PATH; refusing to skip format:fix (use --no-verify to bypass)" >&2
+  exit 1
+fi
 staged=$(git diff --cached --name-only --diff-filter=ACM -- 'src/**/*.ts')
-pnpm run format:fix
+$pnpm_cmd run format:fix || exit 1
 if [ -n "$staged" ]; then
   echo "$staged" | xargs git add
 fi
