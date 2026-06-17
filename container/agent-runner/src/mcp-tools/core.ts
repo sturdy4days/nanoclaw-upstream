@@ -154,10 +154,21 @@ export const sendFile: McpToolDefinition = {
     if ('error' in routing) return err(routing.error);
 
     const resolvedPath = path.isAbsolute(filePath) ? filePath : path.resolve('/workspace/agent', filePath);
+    // Confine the read to the workspace. Without this, an absolute path lets the
+    // agent send ANY container-readable file (credential state, files under
+    // /workspace/extra/* mounts, other data) — a prompt-injected agent can turn
+    // send_file into arbitrary local-file exfiltration (CVE-2026-29611, #2760).
+    if (resolvedPath !== '/workspace' && !resolvedPath.startsWith('/workspace/'))
+      return err('path must be within /workspace');
     if (!fs.existsSync(resolvedPath)) return err(`File not found: ${filePath}`);
 
     const id = generateId();
-    const filename = (args.filename as string) || path.basename(resolvedPath);
+    // Strip any directory components from the display name. path.join() resolves
+    // `..`, so a filename like `../../home/node/.claude/skills/x/SKILL.md` would
+    // write outside the outbox and could overwrite an active skill (instruction
+    // injection on the next spawn). basename() collapses it to a leaf name.
+    const filename =
+      path.basename((args.filename as string) || path.basename(resolvedPath)) || path.basename(resolvedPath);
 
     const outboxDir = path.join('/workspace/outbox', id);
     fs.mkdirSync(outboxDir, { recursive: true });
