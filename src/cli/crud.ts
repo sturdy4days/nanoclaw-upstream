@@ -69,6 +69,13 @@ export interface ResourceDef {
   };
   /** Non-standard verbs (grant, revoke, add, remove, restart, etc.). */
   customOperations?: Record<string, CustomOperation>;
+  /**
+   * Optional pre-insert validation for `create`, run on the assembled column
+   * values before the INSERT. Throw to reject. Lets a resource enforce an
+   * invariant the generic path can't express (e.g. a path-traversal guard on a
+   * folder column that's bind-mounted into a container).
+   */
+  validate?: (values: Record<string, unknown>) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -152,6 +159,8 @@ function genericCreate(def: ResourceDef) {
         values[col.name] = col.default;
       }
     }
+
+    if (def.validate) def.validate(values);
 
     const colNames = Object.keys(values);
     const placeholders = colNames.map((c) => `@${c}`);

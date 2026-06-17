@@ -3,6 +3,7 @@ import { buildAgentGroupImage, killContainer, wakeContainer } from '../../contai
 import { restartAgentGroupContainers } from '../../container-restart.js';
 import { getDb, hasTable } from '../../db/connection.js';
 import { getSession } from '../../db/sessions.js';
+import { assertValidGroupFolder } from '../../group-folder.js';
 import { writeSessionMessage } from '../../session-manager.js';
 import {
   getContainerConfig,
@@ -58,6 +59,12 @@ registerResource({
     },
     { name: 'created_at', type: 'string', description: 'Auto-set.', generated: true },
   ],
+  // SECURITY: the CLI create path must enforce the same folder validator as the
+  // domain helper createAgentGroup. genericCreate skips that helper, so without
+  // this `ncl groups create --folder ../../etc` persists a folder that escapes
+  // GROUPS_DIR and is later bind-mounted RW + mkdir'd into the container
+  // (CWE-22 path traversal → container sandbox escape).
+  validate: (values) => assertValidGroupFolder(values.folder as string),
   // `delete` is intentionally not in `operations` — the generic single-table
   // DELETE violates FK constraints (see #2525). The cascading handler is
   // provided as `customOperations.delete` below.
