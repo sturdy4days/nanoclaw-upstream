@@ -145,7 +145,12 @@ export function setChannelRequestGate(fn: ChannelRequestGateFn): void {
 
 function safeParseContent(raw: string): { text?: string; sender?: string; senderId?: string } {
   try {
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    // JSON.parse on a primitive ("5", "true", "\"hi\"") succeeds but returns a
+    // non-object; callers read .text/.sender off the result, so anything that
+    // isn't a plain object must fall back to treating raw as the text body.
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+    return { text: raw };
   } catch {
     return { text: raw };
   }
