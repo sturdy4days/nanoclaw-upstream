@@ -14,6 +14,12 @@ import type { Transport } from './transport.js';
 
 export const DEFAULT_SOCKET_PATH = path.join(DATA_DIR, 'ncl.sock');
 
+// A deadlocked host could accept the connection but never reply, leaving the
+// promise unsettled forever; and a host streaming without a newline could grow
+// the buffer without bound. Cap both — callers are interactive `ncl` invocations.
+const REQUEST_TIMEOUT_MS = 30_000;
+const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+
 export class SocketTransport implements Transport {
   constructor(private readonly socketPath: string = DEFAULT_SOCKET_PATH) {}
 
@@ -23,9 +29,14 @@ export class SocketTransport implements Transport {
       let buffer = '';
       let settled = false;
 
+      const timer = setTimeout(() => {
+        settle('reject', new Error(`host did not respond within ${REQUEST_TIMEOUT_MS}ms`));
+      }, REQUEST_TIMEOUT_MS);
+
       const settle = (action: 'resolve' | 'reject', valueOrErr: ResponseFrame | Error): void => {
         if (settled) return;
         settled = true;
+        clearTimeout(timer);
         try {
           client.end();
         } catch (_e) {
@@ -41,6 +52,10 @@ export class SocketTransport implements Transport {
 
       client.on('data', (chunk) => {
         buffer += chunk.toString('utf8');
+        if (buffer.length > MAX_RESPONSE_BYTES) {
+          settle('reject', new Error('host response exceeded maximum size'));
+          return;
+        }
         const idx = buffer.indexOf('\n');
         if (idx < 0) return;
         const line = buffer.slice(0, idx);
