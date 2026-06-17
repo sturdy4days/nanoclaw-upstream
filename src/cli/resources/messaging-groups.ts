@@ -24,6 +24,14 @@ registerResource({
       required: true,
     },
     {
+      name: 'instance',
+      type: 'string',
+      description:
+        'Adapter-instance name (which bot/account). Schema is NOT NULL; for a single-bot channel pass the channel_type (e.g. "telegram").',
+      required: true,
+      updatable: true,
+    },
+    {
       name: 'name',
       type: 'string',
       description: 'Display name. Often auto-populated by the channel adapter.',
