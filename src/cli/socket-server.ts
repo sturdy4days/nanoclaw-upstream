@@ -64,9 +64,11 @@ function handleConnection(conn: net.Socket): void {
   let buffer = '';
   conn.on('data', (chunk) => {
     buffer += chunk.toString('utf8');
-    // A client that never sends a newline would otherwise grow `buffer`
-    // unboundedly and pin host memory; cap the unframed accumulation.
-    if (buffer.length > MAX_FRAME_BYTES) {
+    // Cap the unframed accumulation by BYTES (not decoded char length): a client
+    // that never sends a newline would otherwise grow `buffer` unboundedly and
+    // pin host memory, and a multibyte payload could exceed the byte limit while
+    // its char-length stays under it.
+    if (Buffer.byteLength(buffer) > MAX_FRAME_BYTES) {
       write(conn, {
         id: 'unknown',
         ok: false,
