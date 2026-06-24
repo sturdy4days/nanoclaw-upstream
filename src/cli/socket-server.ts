@@ -37,7 +37,13 @@ export async function startCliServer(socketPath: string = DEFAULT_SOCKET_PATH): 
       try {
         fs.chmodSync(socketPath, 0o600);
       } catch (err) {
-        log.warn('Failed to chmod ncl socket (continuing)', { socketPath, err });
+        // The 0600 chmod is the entire auth boundary for this host control
+        // socket (any local process that can connect runs privileged ncl
+        // commands). If it can't be set, refuse to listen rather than serve an
+        // unguarded socket.
+        s.close();
+        reject(new Error(`Failed to chmod ncl socket to 0600 (refusing to listen): ${String(err)}`));
+        return;
       }
       log.info('ncl CLI server listening', { socketPath });
       resolve();
@@ -52,10 +58,23 @@ export async function stopCliServer(): Promise<void> {
   await new Promise<void>((resolve) => s.close(() => resolve()));
 }
 
+const MAX_FRAME_BYTES = 256 * 1024;
+
 function handleConnection(conn: net.Socket): void {
   let buffer = '';
   conn.on('data', (chunk) => {
     buffer += chunk.toString('utf8');
+    // A client that never sends a newline would otherwise grow `buffer`
+    // unboundedly and pin host memory; cap the unframed accumulation.
+    if (buffer.length > MAX_FRAME_BYTES) {
+      write(conn, {
+        id: 'unknown',
+        ok: false,
+        error: { code: 'transport-error', message: 'frame exceeds maximum size' },
+      });
+      conn.destroy();
+      return;
+    }
     let idx: number;
     while ((idx = buffer.indexOf('\n')) >= 0) {
       const line = buffer.slice(0, idx).trim();
