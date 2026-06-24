@@ -13,6 +13,14 @@ import {
 import type { ContainerConfigRow } from '../../types.js';
 import { registerResource } from '../crud.js';
 
+// `image_tag` becomes the image argument to spawn(CONTAINER_RUNTIME_BIN, [...])
+// at container spawn time. Restrict `config update --image-tag` to a bare LOCAL
+// image reference (name[:tag], optionally a @sha256 digest), the shapes
+// buildAgentGroupImage produces, plus the default `:latest`. A `/` in the name
+// (a registry/remote host) is rejected so an approved config-update cannot point
+// the host at an attacker-chosen image carrying this group's mounts and secrets.
+const IMAGE_TAG_RE = /^[a-z0-9][a-z0-9._-]*(:[a-zA-Z0-9._-]+)?(@sha256:[a-f0-9]{64})?$/;
+
 /** Deserialize JSON columns for display. */
 function presentConfig(row: ContainerConfigRow): Record<string, unknown> {
   return {
@@ -236,7 +244,15 @@ registerResource({
         if (args.provider !== undefined) updates.provider = args.provider as string;
         if (args.model !== undefined) updates.model = args.model as string;
         if (args.effort !== undefined) updates.effort = args.effort as string;
-        if (args.image_tag !== undefined) updates.image_tag = args.image_tag as string;
+        if (args.image_tag !== undefined) {
+          const tag = args.image_tag as string;
+          if (!IMAGE_TAG_RE.test(tag)) {
+            throw new Error(
+              '--image-tag must be a bare local image reference (name[:tag] with no registry host); remote/registry refs are not allowed.',
+            );
+          }
+          updates.image_tag = tag;
+        }
         if (args.assistant_name !== undefined) updates.assistant_name = args.assistant_name as string;
         if (args.max_messages_per_prompt !== undefined)
           updates.max_messages_per_prompt = Number(args.max_messages_per_prompt);
