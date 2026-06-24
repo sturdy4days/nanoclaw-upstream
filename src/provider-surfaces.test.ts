@@ -71,7 +71,7 @@ describe('initGroupFilesystem agent surfaces', () => {
     expect(fs.existsSync(path.join(claudeDir, 'skills'))).toBe(true);
   });
 
-  it('skips the default surfaces for a provider that provides its own', () => {
+  it('writes the seed into the memory scaffold — never CLAUDE.* — for a provider with its own surfaces', () => {
     const ag = group('ag-surfy', 'surfy-group');
     createAgentGroup(ag);
 
@@ -80,8 +80,25 @@ describe('initGroupFilesystem agent surfaces', () => {
     const groupDir = path.join(GROUPS_DIR, ag.folder);
     const sessionRoot = path.join(DATA_DIR, 'v2-sessions', ag.id);
     expect(fs.existsSync(groupDir)).toBe(true);
+    // A fresh group on a surfaces-owning provider must not contain stale
+    // Claude surfaces; its seed lands in the scaffold's conventional file,
+    // which the container-side scaffold preserves at boot.
     expect(fs.existsSync(path.join(groupDir, 'CLAUDE.local.md'))).toBe(false);
+    expect(fs.readFileSync(path.join(groupDir, 'memory', 'memories', 'imported-agent-memory.md'), 'utf-8')).toBe(
+      'hello\n',
+    );
     expect(fs.existsSync(path.join(sessionRoot, '.claude-shared'))).toBe(false);
+  });
+
+  it('writes nothing at all for a surfaces-owning provider without instructions', () => {
+    const ag = group('ag-surfy-bare', 'surfy-bare-group');
+    createAgentGroup(ag);
+
+    initGroupFilesystem(ag, { provider: 'surfaces-test-provider' });
+
+    const groupDir = path.join(GROUPS_DIR, ag.folder);
+    expect(fs.existsSync(path.join(groupDir, 'CLAUDE.local.md'))).toBe(false);
+    expect(fs.existsSync(path.join(groupDir, 'memory'))).toBe(false);
   });
 
   it('treats an unregistered provider name as default surfaces', () => {
@@ -91,6 +108,41 @@ describe('initGroupFilesystem agent surfaces', () => {
     initGroupFilesystem(ag, { provider: 'not-registered' });
 
     expect(fs.existsSync(path.join(GROUPS_DIR, ag.folder, 'CLAUDE.local.md'))).toBe(true);
+  });
+});
+
+describe('initGroupFilesystem deferred seed (.seed.md)', () => {
+  // Creation is provider-agnostic: the DM-agent creators drop a neutral
+  // `.seed.md` and defer placement to the first spawn, where the DB-resolved
+  // provider is known. group-init places it into the right surface and
+  // consumes it. Red-on-delete: if that placement is removed, these fail.
+  it('places .seed.md into CLAUDE.local.md for the default provider, then consumes it', () => {
+    const ag = group('ag-seed-default', 'seed-default');
+    createAgentGroup(ag);
+    const groupDir = path.join(GROUPS_DIR, ag.folder);
+    fs.mkdirSync(groupDir, { recursive: true });
+    fs.writeFileSync(path.join(groupDir, '.seed.md'), 'seeded identity\n');
+
+    initGroupFilesystem(ag, {}); // no inline instructions — must read .seed.md
+
+    expect(fs.readFileSync(path.join(groupDir, 'CLAUDE.local.md'), 'utf-8')).toBe('seeded identity\n');
+    expect(fs.existsSync(path.join(groupDir, '.seed.md'))).toBe(false);
+  });
+
+  it('places .seed.md into the memory scaffold (never CLAUDE.*) for a surfaces-owning provider, then consumes it', () => {
+    const ag = group('ag-seed-surfy', 'seed-surfy');
+    createAgentGroup(ag);
+    const groupDir = path.join(GROUPS_DIR, ag.folder);
+    fs.mkdirSync(groupDir, { recursive: true });
+    fs.writeFileSync(path.join(groupDir, '.seed.md'), 'seeded identity\n');
+
+    initGroupFilesystem(ag, { provider: 'surfaces-test-provider' });
+
+    expect(fs.existsSync(path.join(groupDir, 'CLAUDE.local.md'))).toBe(false);
+    expect(fs.readFileSync(path.join(groupDir, 'memory', 'memories', 'imported-agent-memory.md'), 'utf-8')).toBe(
+      'seeded identity\n',
+    );
+    expect(fs.existsSync(path.join(groupDir, '.seed.md'))).toBe(false);
   });
 });
 

@@ -66,13 +66,43 @@ export function initGroupFilesystem(
     initialized.push('groupDir');
   }
 
-  // groups/<folder>/CLAUDE.local.md — per-group agent memory, auto-loaded by
-  // Claude Code. Seeded with caller-provided instructions on first creation.
-  const claudeLocalFile = path.join(groupDir, 'CLAUDE.local.md');
-  if (defaultSurfaces && !fs.existsSync(claudeLocalFile)) {
-    const body = opts?.instructions ? opts.instructions + '\n' : '';
-    fs.writeFileSync(claudeLocalFile, body);
-    initialized.push('CLAUDE.local.md');
+  // Seed instructions land in the provider's OWN memory surface. Default
+  // (Claude) surfaces auto-load CLAUDE.local.md natively. A surfaces-owning
+  // provider must never see stale CLAUDE.* files in its workspace — its seed
+  // goes into the memory scaffold's conventional landing file instead
+  // (memory/memories/imported-agent-memory.md): the container-side scaffold
+  // preserves pre-existing files, and the doctrine tells the agent to read
+  // that file on its first turn.
+  //
+  // Creation stays provider-agnostic: a DM-agent creator drops the seed in a
+  // neutral `.seed.md`, and placement is deferred to here (the first spawn,
+  // where the DB-resolved provider is known). Once placed it's consumed.
+  // `opts.instructions` still wins for any caller that passes it inline.
+  const neutralSeedFile = path.join(groupDir, '.seed.md');
+  const seed =
+    opts?.instructions ??
+    (fs.existsSync(neutralSeedFile) ? fs.readFileSync(neutralSeedFile, 'utf-8').trimEnd() : undefined);
+
+  if (defaultSurfaces) {
+    const claudeLocalFile = path.join(groupDir, 'CLAUDE.local.md');
+    if (!fs.existsSync(claudeLocalFile)) {
+      fs.writeFileSync(claudeLocalFile, seed ? seed + '\n' : '');
+      initialized.push('CLAUDE.local.md');
+    }
+  } else if (seed) {
+    const seedFile = path.join(groupDir, 'memory', 'memories', 'imported-agent-memory.md');
+    if (!fs.existsSync(seedFile)) {
+      fs.mkdirSync(path.dirname(seedFile), { recursive: true });
+      fs.writeFileSync(seedFile, seed + '\n');
+      initialized.push('memory/memories/imported-agent-memory.md');
+    }
+  }
+
+  // The neutral seed is single-use — drop it once the surface it belonged in
+  // has been resolved, so it can't re-seed after the operator edits theirs.
+  if (fs.existsSync(neutralSeedFile)) {
+    fs.rmSync(neutralSeedFile);
+    initialized.push('.seed.md consumed');
   }
 
   // Ensure container_configs row exists in the DB. Idempotent — no-op if
