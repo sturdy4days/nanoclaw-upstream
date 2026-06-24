@@ -386,10 +386,17 @@ function evaluateEngage(
 ): boolean {
   switch (agent.engage_mode) {
     case 'pattern': {
-      const pat = agent.engage_pattern ?? '.';
+      // `?? '.'` left an empty or whitespace-only pattern intact, so a blank
+      // engage_pattern compiled to `new RegExp('')` / `new RegExp('   ')` and
+      // matched (nearly) every message. Normalize blank/whitespace to the
+      // explicit always-engage sentinel instead.
+      const pat = agent.engage_pattern?.trim() || '.';
       if (pat === '.') return true;
       try {
-        return new RegExp(pat).test(text);
+        // Bound the input a (possibly mistyped, catastrophic-backtracking) regex
+        // tests against, so a huge inbound message can't drive a ReDoS hang.
+        const probe = text.length > 8192 ? text.slice(0, 8192) : text;
+        return new RegExp(pat).test(probe);
       } catch {
         // Bad regex: fail open so admin sees the agent responding + can fix.
         return true;
