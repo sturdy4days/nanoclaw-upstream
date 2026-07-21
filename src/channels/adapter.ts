@@ -93,11 +93,27 @@ export interface OutboundFile {
   data: Buffer;
 }
 
+/**
+ * Host-generated presentation hint for a synthesized voice reply.
+ *
+ * Audio bytes still travel through `files`; this metadata only lets a
+ * capable adapter choose a platform-native push-to-talk presentation. The
+ * hint is a host-side field and must never be reconstructed from model-authored
+ * outbound content.
+ */
+export interface OutboundVoiceSignal {
+  filename: string;
+  mimeType: string;
+  ptt: true;
+}
+
 /** Outbound message from host to adapter. */
 export interface OutboundMessage {
   kind: string;
   content: unknown; // parsed JSON from messages_out
   files?: OutboundFile[]; // file attachments from the session outbox
+  /** Host-authenticated presentation hint; never projected from content. */
+  voice?: OutboundVoiceSignal;
 }
 
 /** Discovered conversation info (from syncConversations). */

@@ -13,8 +13,11 @@ import { upsertUser } from '../modules/permissions/db/users.js';
 import { createChatSdkBridge, type ReplyContext } from './chat-sdk-bridge.js';
 import { sanitizeTelegramLegacyMarkdown } from './telegram-markdown-sanitize.js';
 import { registerChannelAdapter } from './channel-registry.js';
-import type { ChannelAdapter, ChannelSetup, InboundMessage } from './adapter.js';
+import type { ChannelAdapter, ChannelSetup, InboundMessage, OutboundMessage } from './adapter.js';
 import { tryConsume } from './telegram-pairing.js';
+
+const TELEGRAM_VOICE_FILENAME = 'voice-reply.ogg';
+const TELEGRAM_VOICE_MIME = 'audio/ogg';
 
 /**
  * Retry a one-shot operation that can fail on transient network errors at
@@ -64,6 +67,82 @@ function isGroupPlatformId(platformId: string): boolean {
   // platformId is "telegram:<chatId>". Negative chat IDs are groups/channels.
   const id = platformId.split(':').pop() ?? '';
   return id.startsWith('-');
+}
+
+interface TelegramVoiceCandidate {
+  file: NonNullable<OutboundMessage['files']>[number];
+}
+
+type TelegramVoiceResult = { state: 'sent'; messageId: string } | { state: 'rejected' } | { state: 'ambiguous' };
+
+/** Accept only the host synthesizer's typed and pinned voice signal. */
+function getTelegramVoiceCandidate(message: OutboundMessage): TelegramVoiceCandidate | null {
+  const content = message.content;
+  if (!content || typeof content !== 'object' || Array.isArray(content)) return null;
+  const record = content as Record<string, unknown>;
+  const voice = message.voice;
+  if (
+    !voice ||
+    voice.filename !== TELEGRAM_VOICE_FILENAME ||
+    voice.mimeType !== TELEGRAM_VOICE_MIME ||
+    voice.ptt !== true ||
+    typeof record.text !== 'string' ||
+    !record.text.trim() ||
+    !message.files ||
+    message.files.length !== 1
+  ) {
+    return null;
+  }
+  const [file] = message.files;
+  if (!file || file.filename !== TELEGRAM_VOICE_FILENAME) return null;
+  return { file };
+}
+
+async function sendTelegramVoice(
+  token: string,
+  platformId: string,
+  threadId: string | null,
+  candidate: TelegramVoiceCandidate,
+): Promise<TelegramVoiceResult> {
+  const destination = threadId ?? platformId;
+  const chatId = destination.split(':').slice(1).join(':');
+  if (!chatId) return { state: 'rejected' };
+
+  const form = new FormData();
+  form.append('chat_id', chatId);
+  form.append(
+    'voice',
+    new Blob([new Uint8Array(candidate.file.data)], { type: TELEGRAM_VOICE_MIME }),
+    candidate.file.filename,
+  );
+
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${token}/sendVoice`, {
+      method: 'POST',
+      body: form,
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) {
+      log.warn('Telegram native voice rejected; falling back to attachment', { status: response.status });
+      return { state: 'rejected' };
+    }
+    const data = (await response.json()) as { ok?: boolean; result?: { message_id?: number } };
+    if (!data.ok || data.result?.message_id === undefined) {
+      log.warn('Telegram native voice returned no receipt; falling back to attachment', {
+        status: response.status,
+        apiOk: data.ok === true,
+      });
+      return { state: 'rejected' };
+    }
+    return { state: 'sent', messageId: `${chatId}:${data.result.message_id}` };
+  } catch (err) {
+    // The request might have reached Telegram before the response was lost.
+    // Replaying the audio here could create a duplicate voice message.
+    log.warn('Telegram native voice outcome ambiguous; keeping the delivered text reply', {
+      errorType: err instanceof Error ? err.name : typeof err,
+    });
+    return { state: 'ambiguous' };
+  }
 }
 
 interface InboundFields {
@@ -217,6 +296,32 @@ registerChannelAdapter('telegram', {
 
     const wrapped: ChannelAdapter = {
       ...bridge,
+      deliver: async (platformId, threadId, message: OutboundMessage) => {
+        const voiceCandidate = getTelegramVoiceCandidate(message);
+        if (!voiceCandidate) return bridge.deliver(platformId, threadId, message);
+
+        // Text is delivered once before the additive, captionless voice bubble.
+        const textReceipt = await bridge.deliver(platformId, threadId, {
+          ...message,
+          files: undefined,
+          voice: undefined,
+        });
+        const nativeVoice = await sendTelegramVoice(token, platformId, threadId, voiceCandidate);
+        if (nativeVoice.state === 'rejected') {
+          try {
+            await bridge.deliver(platformId, threadId, {
+              ...message,
+              content: { ...(message.content as Record<string, unknown>), text: '' },
+              voice: undefined,
+            });
+          } catch (err) {
+            log.warn('Telegram voice attachment fallback failed after text delivery', {
+              errorType: err instanceof Error ? err.name : typeof err,
+            });
+          }
+        }
+        return textReceipt ?? (nativeVoice.state === 'sent' ? nativeVoice.messageId : undefined);
+      },
       resolveChannelName: async (platformId: string) => {
         const chatId = platformId.split(':').slice(1).join(':');
         if (!chatId) return null;
